@@ -1,79 +1,81 @@
 pipeline {
     agent any
+
     environment {
-        //be sure to replace "willbla" with your own Docker Hub username
-        DOCKER_IMAGE_NAME = "willbla/train-schedule"
+        DOCKER_IMAGE_NAME = "willbla/train-schedule"   
+        DOCKER_TAG = 'latest'                          
+        DOCKER_REGISTRY = 'https://hub.docker.com/repositories/aaravsk'    
+        GRADLE_HOME = '/opt/gradle'                    
     }
+
     stages {
+        stage('Checkout') {
+            steps {
+                // Checkout the code from GitHub
+                git 'https://github.com/Aarav2411/Devops-project-2.git'  
+            }
+        }
+
         stage('Build') {
             steps {
-                echo 'Running build automation'
-                sh './gradlew build --no-daemon'
-                archiveArtifacts artifacts: 'dist/trainSchedule.zip'
+                script {
+                    // Gradle build with --stacktrace option for better error logs
+                    sh './gradlew build --stacktrace'
+                }
             }
         }
+
         stage('Build Docker Image') {
-            when {
-                branch 'master'
-            }
             steps {
                 script {
-                    app = docker.build(DOCKER_IMAGE_NAME)
-                    app.inside {
-                        sh 'echo Hello, World!'
-                    }
+                    // Build the Docker image and tag it with the version
+                    sh 'docker build -t ${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:${DOCKER_TAG} .'
                 }
             }
         }
+
         stage('Push Docker Image') {
-            when {
-                branch 'master'
-            }
             steps {
                 script {
-                    docker.withRegistry('https://registry.hub.docker.com', 'docker_hub_login') {
-                        app.push("${env.BUILD_NUMBER}")
-                        app.push("latest")
+                    // Login to Docker Hub (ensure you have configured Docker credentials in Jenkins)
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                        sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
                     }
+                    // Push the Docker image to Docker Hub
+                    sh 'docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE_NAME}:${DOCKER_TAG}'
                 }
             }
         }
-        stage('CanaryDeploy') {
-            when {
-                branch 'master'
-            }
-            environment { 
-                CANARY_REPLICAS = 1
-            }
+
+        stage('Canary Deploy') {
             steps {
-                kubernetesDeploy(
-                    kubeconfigId: 'kubeconfig',
-                    configs: 'train-schedule-kube-canary.yml',
-                    enableConfigSubstitution: true
-                )
+                script {
+                    // Deploy to the canary environment (you can customize this to use kubectl, etc.)
+                    sh 'kubectl apply -f train-schedule-kube-canary.yml'
+                }
             }
         }
-        stage('DeployToProduction') {
-            when {
-                branch 'master'
-            }
-            environment { 
-                CANARY_REPLICAS = 0
-            }
+
+        stage('Deploy to Production') {
             steps {
-                input 'Deploy to Production?'
-                milestone(1)
-                kubernetesDeploy(
-                    kubeconfigId: 'kubeconfig',
-                    configs: 'train-schedule-kube-canary.yml',
-                    enableConfigSubstitution: true
-                )
-                kubernetesDeploy(
-                    kubeconfigId: 'kubeconfig',
-                    configs: 'train-schedule-kube.yml',
-                    enableConfigSubstitution: true
-                )
+                script {
+                    // Deploy to the production environment (you can customize this to use kubectl, etc.)
+                    sh 'kubectl apply -f train-schedule-kube.yml'
+                }
             }
         }
     }
+
+    post {
+        success {
+            echo 'Deployment Successful!'
+        }
+        failure {
+            echo 'Deployment Failed!'
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
 }
